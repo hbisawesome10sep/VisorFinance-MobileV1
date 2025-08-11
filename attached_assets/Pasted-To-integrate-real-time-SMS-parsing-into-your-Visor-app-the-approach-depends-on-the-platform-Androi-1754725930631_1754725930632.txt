@@ -1,0 +1,59 @@
+To integrate real-time SMS parsing into your Visor app, the approach depends on the platform (Android, iOS, Web).
+Since SMS access is restricted differently per OS, you’ll need to handle this carefully:
+1. Android – Direct SMS Access
+Android allows SMS parsing via native permissions, but Google Play now restricts READ_SMS permissions unless your app’s core function requires it.
+For financial apps like Visor, you can apply for this permission under “Default SMS handler or Financial Services” use case.
+Steps for Android Native SMS Parsing
+Request Permission
+Add READ_SMS and RECEIVE_SMS permissions in AndroidManifest.xml.
+Dynamically request runtime permissions in the app.
+Use an SMS Retriever API (Google Recommended)
+Pros: Doesn’t require READ_SMS permission.
+Cons: Works only for messages with a unique app hash at the end (OTP-style).
+Not great for parsing generic bank messages.
+Custom BroadcastReceiver
+Implement a BroadcastReceiver for android.provider.Telephony.SMS_RECEIVED.
+Parse the message body for transaction patterns:
+₹2,500 debited from your A/C ****1234 on 08-08-2025 at 10:45AM
+Extract amount, type (credit/debit), merchant, and account number.
+Push this parsed transaction into your app’s local store and update dashboard + AI insights instantly.
+Offline-first Processing
+Save parsed transactions in local database (SQLite/Room).
+Sync with backend when online.
+2. iOS – No Direct SMS Reading
+Apple does not allow apps to read SMS directly due to privacy policies.
+Alternatives:
+Email Parsing
+Ask user to link their email (Gmail, Outlook API).
+Parse transaction alerts from their bank emails.
+Works well for credit card + bank alerts.
+Bank Account Linking (PAN + Account Aggregator Framework)
+India’s Account Aggregator system (e.g., via Perfios, Finvu, OneMoney) can fetch transaction data directly from banks with user consent.
+100% RBI-compliant.
+User Upload Option
+Let user copy-paste SMS into the app or upload .txt export from iCloud Messages (not very elegant, but safe).
+3. Cross-Platform Best Approach for Visor
+Since Visor targets Android, iOS, Web, we can make SMS parsing Android-only, while using email parsing + bank linking for iOS and Web.
+Hybrid Flow
+Android users:
+Real-time parsing via BroadcastReceiver → update transactions instantly.
+iOS users:
+Email API + Account Aggregator → pull transaction history in near real time.
+4. Parsing Logic
+Maintain a Regex library for parsing bank SMS formats:
+/(?:credited|debited|withdrawn|spent|purchased|paid).*?(₹[\d,]+)/i
+Map sender IDs to banks (HDFCBK, ICICIB, etc.).
+Detect:
+Amount
+Transaction type (credit/debit)
+Merchant/description
+Date & time
+Categorize automatically (Food, Bills, Salary, etc.).
+Push to Transactions store and trigger AI Insights update.
+5. Real-Time Update in the App
+Use a global store (Zustand, Redux, Context API) to instantly push parsed transactions into the UI.
+Trigger:
+Dashboard refresh
+AI insights recalculation
+Notifications:
+"New Transaction Detected: ₹2,500 spent on Groceries."

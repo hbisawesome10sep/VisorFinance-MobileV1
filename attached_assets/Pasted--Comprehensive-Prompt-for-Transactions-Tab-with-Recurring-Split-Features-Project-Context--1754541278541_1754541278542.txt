@@ -1,0 +1,1754 @@
+# 📋 Comprehensive Prompt for Transactions Tab with Recurring & Split Features
+
+## Project Context
+**Platform**: Replit  
+**Framework**: React Native with Expo  
+**App**: Visor - AI-powered financial management app  
+**Current Focus**: Transactions Tab with advanced Recurring and Split transaction features
+
+## 🎯 Core Requirements
+
+### 1. Transactions Tab Structure
+Create a comprehensive Transactions screen with three main sections:
+- **Transaction Feed**: Chronological list of all transactions (auto-parsed + manual)
+- **Add Transaction**: Full-featured form with recurring and split options
+- **Categories**: Visual category selector with icons and colors
+
+### 2. Recurring Transactions Feature
+**Requirements**:
+- Allow users to set transactions as recurring (2-299 occurrences)
+- Frequency options: Daily, Weekly, Bi-weekly, Monthly, Quarterly, Yearly
+- End conditions: After X occurrences OR by specific date
+- Edit capability with validation
+- Visual indicator for recurring transactions in the feed
+- Preview of future occurrences
+
+### 3. Split Transaction Feature
+**Requirements**:
+- Split single transaction among 2-50 participants
+- Split methods: Equal split, Percentage-based, Custom amounts
+- Each split participant: Name, Amount/Percentage, Contact (optional)
+- Validation: Sum of splits must equal total amount
+- Visual representation of splits in transaction details
+- Edit capability with real-time validation
+
+### 4. Validation & Error Handling
+- **Recurring**: Range validation (2-299), with clear error messages
+- **Split**: Range validation (2-50 participants), amount validation
+- Real-time validation during input
+- Toast notifications for errors
+- Inline error messages below fields
+
+## 🚀 Complete Implementation
+
+````typescript name=src/screens/Transactions/TransactionsScreen.tsx
+import React, { useState, useCallback, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Modal,
+  FlatList,
+  Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Dimensions,
+  Switch,
+  Animated,
+} from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import { Feather } from '@expo/vector-icons';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useTheme } from '../../contexts/ThemeContext';
+import { formatCurrency, formatDate } from '../../utils/formatters';
+import TransactionCard from '../../components/Transactions/TransactionCard';
+import RecurringModal from '../../components/Transactions/RecurringModal';
+import SplitModal from '../../components/Transactions/SplitModal';
+import CategoryPicker from '../../components/Transactions/CategoryPicker';
+import { useTransactions } from '../../hooks/useTransactions';
+import { Transaction, RecurringConfig, SplitConfig } from '../../types/transaction';
+import Toast from 'react-native-toast-message';
+
+const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
+const isTablet = screenWidth >= 768;
+
+const TransactionsScreen: React.FC = () => {
+  const { theme } = useTheme();
+  const { transactions, addTransaction, updateTransaction, deleteTransaction } = useTransactions();
+  
+  // State management
+  const [activeTab, setActiveTab] = useState<'feed' | 'add' | 'categories'>('feed');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [filters, setFilters] = useState({
+    dateRange: 'all',
+    category: 'all',
+    type: 'all',
+    account: 'all',
+  });
+
+  // Transaction form state
+  const [transactionForm, setTransactionForm] = useState<Partial<Transaction>>({
+    amount: 0,
+    type: 'expense',
+    category: null,
+    description: '',
+    account: '',
+    date: new Date(),
+    notes: '',
+    tags: [],
+    isRecurring: false,
+    recurringConfig: null,
+    isSplit: false,
+    splitConfig: null,
+  });
+
+  // Validation errors
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
+
+  // Modals
+  const [showRecurringModal, setShowRecurringModal] = useState(false);
+  const [showSplitModal, setShowSplitModal] = useState(false);
+  const [showCategoryPicker, setShowCategoryPicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+
+  // Animation refs
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(screenHeight)).current;
+
+  // Validation functions
+  const validateRecurring = (config: RecurringConfig): boolean => {
+    if (config.occurrences < 2 || config.occurrences > 299) {
+      Toast.show({
+        type: 'error',
+        text1: 'Invalid Recurring Value',
+        text2: 'Occurrences must be between 2 and 299',
+        position: 'top',
+      });
+      setErrors(prev => ({ ...prev, recurring: 'Occurrences must be between 2-299' }));
+      return false;
+    }
+    setErrors(prev => ({ ...prev, recurring: '' }));
+    return true;
+  };
+
+  const validateSplit = (config: SplitConfig): boolean => {
+    const participantCount = config.participants.length;
+    if (participantCount < 2 || participantCount > 50) {
+      Toast.show({
+        type: 'error',
+        text1: 'Invalid Split Configuration',
+        text2: 'Split must be between 2 and 50 participants',
+        position: 'top',
+      });
+      setErrors(prev => ({ ...prev, split: 'Participants must be between 2-50' }));
+      return false;
+    }
+
+    const totalAmount = config.participants.reduce((sum, p) => sum + p.amount, 0);
+    if (Math.abs(totalAmount - transactionForm.amount!) > 0.01) {
+      Toast.show({
+        type: 'error',
+        text1: 'Split Amount Mismatch',
+        text2: 'Sum of split amounts must equal total amount',
+        position: 'top',
+      });
+      setErrors(prev => ({ ...prev, split: 'Split amounts must sum to total' }));
+      return false;
+    }
+
+    setErrors(prev => ({ ...prev, split: '' }));
+    return true;
+  };
+
+  const handleSubmit = useCallback(() => {
+    // Validate required fields
+    if (!transactionForm.amount || transactionForm.amount <= 0) {
+      Toast.show({
+        type: 'error',
+        text1: 'Invalid Amount',
+        text2: 'Please enter a valid amount',
+      });
+      return;
+    }
+
+    if (!transactionForm.category) {
+      Toast.show({
+        type: 'error',
+        text1: 'Category Required',
+        text2: 'Please select a category',
+      });
+      return;
+    }
+
+    // Validate recurring if enabled
+    if (transactionForm.isRecurring && transactionForm.recurringConfig) {
+      if (!validateRecurring(transactionForm.recurringConfig)) {
+        return;
+      }
+    }
+
+    // Validate split if enabled
+    if (transactionForm.isSplit && transactionForm.splitConfig) {
+      if (!validateSplit(transactionForm.splitConfig)) {
+        return;
+      }
+    }
+
+    // Add transaction
+    const newTransaction: Transaction = {
+      ...transactionForm as Transaction,
+      id: Date.now().toString(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    addTransaction(newTransaction);
+    
+    // Reset form
+    setTransactionForm({
+      amount: 0,
+      type: 'expense',
+      category: null,
+      description: '',
+      account: '',
+      date: new Date(),
+      notes: '',
+      tags: [],
+      isRecurring: false,
+      recurringConfig: null,
+      isSplit: false,
+      splitConfig: null,
+    });
+    
+    setShowAddModal(false);
+    Toast.show({
+      type: 'success',
+      text1: 'Transaction Added',
+      text2: transactionForm.isRecurring 
+        ? `Recurring transaction created (${transactionForm.recurringConfig?.occurrences} times)`
+        : 'Transaction has been added successfully',
+    });
+  }, [transactionForm, addTransaction]);
+
+  // Render transaction feed
+  const renderFeed = () => (
+    <View style={styles.feedContainer}>
+      {/* Filter bar */}
+      <ScrollView 
+        horizontal 
+        showsHorizontalScrollIndicator={false}
+        style={styles.filterBar}
+      >
+        <TouchableOpacity style={styles.filterChip}>
+          <Feather name="calendar" size={16} color={theme.textSecondary} />
+          <Text style={[styles.filterText, { color: theme.textSecondary }]}>
+            All Time
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.filterChip}>
+          <Feather name="grid" size={16} color={theme.textSecondary} />
+          <Text style={[styles.filterText, { color: theme.textSecondary }]}>
+            All Categories
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.filterChip}>
+          <Feather name="filter" size={16} color={theme.textSecondary} />
+          <Text style={[styles.filterText, { color: theme.textSecondary }]}>
+            More Filters
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+
+      {/* Transactions list */}
+      <FlatList
+        data={transactions}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item }) => (
+          <TransactionCard
+            transaction={item}
+            onPress={() => setSelectedTransaction(item)}
+            onEdit={() => {
+              setTransactionForm(item);
+              setShowAddModal(true);
+            }}
+          />
+        )}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Feather name="inbox" size={48} color={theme.textSecondary} />
+            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+              No transactions yet
+            </Text>
+            <Text style={[styles.emptySubtext, { color: theme.textSecondary }]}>
+              Add your first transaction to get started
+            </Text>
+          </View>
+        }
+      />
+    </View>
+  );
+
+  // Render add transaction modal
+  const renderAddModal = () => (
+    <Modal
+      visible={showAddModal}
+      animationType="slide"
+      transparent
+      onRequestClose={() => setShowAddModal(false)}
+    >
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.modalContainer}
+      >
+        <View style={[styles.modalContent, { backgroundColor: theme.surface }]}>
+          {/* Modal header */}
+          <View style={styles.modalHeader}>
+            <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>
+              {selectedTransaction ? 'Edit Transaction' : 'Add Transaction'}
+            </Text>
+            <TouchableOpacity onPress={() => setShowAddModal(false)}>
+              <Feather name="x" size={24} color={theme.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Amount input */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Amount</Text>
+              <View style={styles.amountInputContainer}>
+                <Text style={[styles.currencySymbol, { color: theme.textPrimary }]}>₹</Text>
+                <TextInput
+                  style={[styles.amountInput, { color: theme.textPrimary }]}
+                  value={transactionForm.amount?.toString() || ''}
+                  onChangeText={(text) => {
+                    const amount = parseFloat(text) || 0;
+                    setTransactionForm(prev => ({ ...prev, amount }));
+                  }}
+                  keyboardType="decimal-pad"
+                  placeholder="0.00"
+                  placeholderTextColor={theme.textSecondary}
+                />
+              </View>
+            </View>
+
+            {/* Type selector */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Type</Text>
+              <View style={styles.typeSelector}>
+                <TouchableOpacity
+                  style={[
+                    styles.typeButton,
+                    transactionForm.type === 'expense' && styles.typeButtonActive,
+                    { borderColor: theme.danger },
+                  ]}
+                  onPress={() => setTransactionForm(prev => ({ ...prev, type: 'expense' }))}
+                >
+                  <Feather name="arrow-up-circle" size={20} color={theme.danger} />
+                  <Text style={[styles.typeText, { color: theme.danger }]}>Expense</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.typeButton,
+                    transactionForm.type === 'income' && styles.typeButtonActive,
+                    { borderColor: theme.success },
+                  ]}
+                  onPress={() => setTransactionForm(prev => ({ ...prev, type: 'income' }))}
+                >
+                  <Feather name="arrow-down-circle" size={20} color={theme.success} />
+                  <Text style={[styles.typeText, { color: theme.success }]}>Income</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Category selector */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Category</Text>
+              <TouchableOpacity
+                style={[styles.selector, { borderColor: theme.border }]}
+                onPress={() => setShowCategoryPicker(true)}
+              >
+                {transactionForm.category ? (
+                  <View style={styles.selectorContent}>
+                    <Feather name={transactionForm.category.icon} size={20} color={transactionForm.category.color} />
+                    <Text style={[styles.selectorText, { color: theme.textPrimary }]}>
+                      {transactionForm.category.name}
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={[styles.selectorPlaceholder, { color: theme.textSecondary }]}>
+                    Select category
+                  </Text>
+                )}
+                <Feather name="chevron-down" size={20} color={theme.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Date selector */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Date</Text>
+              <TouchableOpacity
+                style={[styles.selector, { borderColor: theme.border }]}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Feather name="calendar" size={20} color={theme.textSecondary} />
+                <Text style={[styles.selectorText, { color: theme.textPrimary }]}>
+                  {formatDate(transactionForm.date || new Date())}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Account input */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Account</Text>
+              <TextInput
+                style={[styles.input, { color: theme.textPrimary, borderColor: theme.border }]}
+                value={transactionForm.account}
+                onChangeText={(text) => setTransactionForm(prev => ({ ...prev, account: text }))}
+                placeholder="e.g., HDFC Bank"
+                placeholderTextColor={theme.textSecondary}
+              />
+            </View>
+
+            {/* Description input */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Description</Text>
+              <TextInput
+                style={[styles.input, { color: theme.textPrimary, borderColor: theme.border }]}
+                value={transactionForm.description}
+                onChangeText={(text) => setTransactionForm(prev => ({ ...prev, description: text }))}
+                placeholder="What was this transaction for?"
+                placeholderTextColor={theme.textSecondary}
+              />
+            </View>
+
+            {/* Recurring toggle */}
+            <View style={styles.toggleGroup}>
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleLeft}>
+                  <Feather name="repeat" size={20} color={theme.primary} />
+                  <Text style={[styles.toggleLabel, { color: theme.textPrimary }]}>
+                    Recurring Transaction
+                  </Text>
+                </View>
+                <Switch
+                  value={transactionForm.isRecurring}
+                  onValueChange={(value) => {
+                    setTransactionForm(prev => ({ ...prev, isRecurring: value }));
+                    if (value) setShowRecurringModal(true);
+                  }}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                  thumbColor={transactionForm.isRecurring ? theme.primary : '#f4f3f4'}
+                />
+              </View>
+              {transactionForm.isRecurring && transactionForm.recurringConfig && (
+                <TouchableOpacity 
+                  style={styles.configSummary}
+                  onPress={() => setShowRecurringModal(true)}
+                >
+                  <Text style={[styles.configText, { color: theme.textSecondary }]}>
+                    {transactionForm.recurringConfig.frequency} • {transactionForm.recurringConfig.occurrences} times
+                  </Text>
+                  <Feather name="edit-2" size={14} color={theme.primary} />
+                </TouchableOpacity>
+              )}
+              {errors.recurring && (
+                <Text style={styles.errorText}>{errors.recurring}</Text>
+              )}
+            </View>
+
+            {/* Split toggle */}
+            <View style={styles.toggleGroup}>
+              <View style={styles.toggleRow}>
+                <View style={styles.toggleLeft}>
+                  <Feather name="users" size={20} color={theme.primary} />
+                  <Text style={[styles.toggleLabel, { color: theme.textPrimary }]}>
+                    Split Transaction
+                  </Text>
+                </View>
+                <Switch
+                  value={transactionForm.isSplit}
+                  onValueChange={(value) => {
+                    setTransactionForm(prev => ({ ...prev, isSplit: value }));
+                    if (value) setShowSplitModal(true);
+                  }}
+                  trackColor={{ false: theme.border, true: theme.primary }}
+                  thumbColor={transactionForm.isSplit ? theme.primary : '#f4f3f4'}
+                />
+              </View>
+              {transactionForm.isSplit && transactionForm.splitConfig && (
+                <TouchableOpacity 
+                  style={styles.configSummary}
+                  onPress={() => setShowSplitModal(true)}
+                >
+                  <Text style={[styles.configText, { color: theme.textSecondary }]}>
+                    Split between {transactionForm.splitConfig.participants.length} people
+                  </Text>
+                  <Feather name="edit-2" size={14} color={theme.primary} />
+                </TouchableOpacity>
+              )}
+              {errors.split && (
+                <Text style={styles.errorText}>{errors.split}</Text>
+              )}
+            </View>
+
+            {/* Notes input */}
+            <View style={styles.formGroup}>
+              <Text style={[styles.label, { color: theme.textSecondary }]}>Notes</Text>
+              <TextInput
+                style={[styles.textArea, { color: theme.textPrimary, borderColor: theme.border }]}
+                value={transactionForm.notes}
+                onChangeText={(text) => setTransactionForm(prev => ({ ...prev, notes: text }))}
+                placeholder="Additional notes..."
+                placeholderTextColor={theme.textSecondary}
+                multiline
+                numberOfLines={3}
+              />
+            </View>
+
+            {/* Submit button */}
+            <TouchableOpacity
+              style={[styles.submitButton, { backgroundColor: theme.primary }]}
+              onPress={handleSubmit}
+            >
+              <Text style={styles.submitButtonText}>
+                {selectedTransaction ? 'Update Transaction' : 'Add Transaction'}
+              </Text>
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+
+  return (
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.background }]}>
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={[styles.headerTitle, { color: theme.textPrimary }]}>Transactions</Text>
+        <TouchableOpacity onPress={() => Alert.alert('Search', 'Search functionality coming soon')}>
+          <Feather name="search" size={24} color={theme.textPrimary} />
+        </TouchableOpacity>
+      </View>
+
+      {/* Tab bar */}
+      <View style={styles.tabBar}>
+        {['feed', 'categories'].map((tab) => (
+          <TouchableOpacity
+            key={tab}
+            style={[
+              styles.tab,
+              activeTab === tab && styles.activeTab,
+              activeTab === tab && { borderBottomColor: theme.primary },
+            ]}
+            onPress={() => setActiveTab(tab as any)}
+          >
+            <Text
+              style={[
+                styles.tabText,
+                { color: activeTab === tab ? theme.primary : theme.textSecondary },
+              ]}
+            >
+              {tab.charAt(0).toUpperCase() + tab.slice(1)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {/* Content */}
+      {activeTab === 'feed' && renderFeed()}
+      {activeTab === 'categories' && <CategoryPicker onSelect={(category) => {
+        setTransactionForm(prev => ({ ...prev, category }));
+        setActiveTab('feed');
+        setShowAddModal(true);
+      }} />}
+
+      {/* Floating action button */}
+      <TouchableOpacity
+        style={[styles.fab, { backgroundColor: theme.primary }]}
+        onPress={() => setShowAddModal(true)}
+      >
+        <Feather name="plus" size={28} color="#FFFFFF" />
+      </TouchableOpacity>
+
+      {/* Modals */}
+      {renderAddModal()}
+      
+      <RecurringModal
+        visible={showRecurringModal}
+        config={transactionForm.recurringConfig}
+        onSave={(config) => {
+          if (validateRecurring(config)) {
+            setTransactionForm(prev => ({ ...prev, recurringConfig: config }));
+            setShowRecurringModal(false);
+          }
+        }}
+        onClose={() => {
+          setShowRecurringModal(false);
+          if (!transactionForm.recurringConfig) {
+            setTransactionForm(prev => ({ ...prev, isRecurring: false }));
+          }
+        }}
+      />
+
+      <SplitModal
+        visible={showSplitModal}
+        totalAmount={transactionForm.amount || 0}
+        config={transactionForm.splitConfig}
+        onSave={(config) => {
+          if (validateSplit(config)) {
+            setTransactionForm(prev => ({ ...prev, splitConfig: config }));
+            setShowSplitModal(false);
+          }
+        }}
+        onClose={() => {
+          setShowSplitModal(false);
+          if (!transactionForm.splitConfig) {
+            setTransactionForm(prev => ({ ...prev, isSplit: false }));
+          }
+        }}
+      />
+
+      {showCategoryPicker && (
+        <CategoryPicker
+          onSelect={(category) => {
+            setTransactionForm(prev => ({ ...prev, category }));
+            setShowCategoryPicker(false);
+          }}
+          onClose={() => setShowCategoryPicker(false)}
+        />
+      )}
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={transactionForm.date || new Date()}
+          mode="date"
+          display="default"
+          onChange={(event, date) => {
+            setShowDatePicker(false);
+            if (date) {
+              setTransactionForm(prev => ({ ...prev, date }));
+            }
+          }}
+        />
+      )}
+
+      <Toast />
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  headerTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+  },
+  tabBar: {
+    flexDirection: 'row',
+    paddingHorizontal: 20,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E0E0E0',
+  },
+  tab: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    marginRight: 24,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  activeTab: {
+    borderBottomWidth: 2,
+  },
+  tabText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  feedContainer: {
+    flex: 1,
+  },
+  filterBar: {
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    maxHeight: 60,
+  },
+  filterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(0, 0, 0, 0.05)',
+    borderRadius: 20,
+    marginRight: 8,
+    gap: 6,
+  },
+  filterText: {
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  listContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 100,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 80,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 16,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    marginTop: 8,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 24,
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    maxHeight: screenHeight * 0.9,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: '700',
+  },
+  formGroup: {
+    marginBottom: 20,
+  },
+  label: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  input: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+  },
+  textArea: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  amountInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    borderColor: '#E0E0E0',
+  },
+  currencySymbol: {
+    fontSize: 24,
+    fontWeight: '600',
+    marginRight: 8,
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: 32,
+    fontWeight: '700',
+    paddingVertical: 12,
+  },
+  typeSelector: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  typeButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    borderRadius: 12,
+    borderWidth: 2,
+    gap: 8,
+  },
+  typeButtonActive: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+  },
+  typeText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  selector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  selectorContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  selectorText: {
+    fontSize: 16,
+  },
+  selectorPlaceholder: {
+    fontSize: 16,
+  },
+  toggleGroup: {
+    marginBottom: 20,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  toggleLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  toggleLabel: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  configSummary: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(0, 122, 255, 0.05)',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    marginTop: 8,
+  },
+  configText: {
+    fontSize: 14,
+  },
+  errorText: {
+    color: '#FF3B30',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  submitButton: {
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 24,
+  },
+  submitButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+});
+
+export default TransactionsScreen;
+````
+
+````typescript name=src/components/Transactions/RecurringModal.tsx
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  TouchableOpacity,
+  TextInput,
+  ScrollView,
+  Alert,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { Picker } from '@react-native-picker/picker';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useTheme } from '../../contexts/ThemeContext';
+import { RecurringConfig } from '../../types/transaction';
+import Toast from 'react-native-toast-message';
+
+interface RecurringModalProps {
+  visible: boolean;
+  config?: RecurringConfig | null;
+  onSave: (config: RecurringConfig) => void;
+  onClose: () => void;
+}
+
+const RecurringModal: React.FC<RecurringModalProps> = ({
+  visible,
+  config,
+  onSave,
+  onClose,
+}) => {
+  const { theme } = useTheme();
+  const [localConfig, setLocalConfig] = useState<RecurringConfig>({
+    frequency: 'monthly',
+    occurrences: 2,
+    endType: 'occurrences',
+    endDate: null,
+    interval: 1,
+  });
+  const [occurrencesInput, setOccurrencesInput] = useState('2');
+  const [showEndDatePicker, setShowEndDatePicker] = useState(false);
+  const [validationError, setValidationError] = useState('');
+
+  useEffect(() => {
+    if (config) {
+      setLocalConfig(config);
+      setOccurrencesInput(config.occurrences.toString());
+    }
+  }, [config]);
+
+  const validateOccurrences = (value: string) => {
+    const num = parseInt(value);
+    if (isNaN(num)) {
+      setValidationError('Please enter a valid number');
+      return false;
+    }
+    if (num < 2) {
+      setValidationError('Minimum 2 occurrences required');
+      return false;
+    }
+    if (num > 299) {
+      setValidationError('Maximum 299 occurrences allowed');
+      return false;
+    }
+    setValidationError('');
+    return true;
+  };
+
+  const handleOccurrencesChange = (text: string) => {
+    setOccurrencesInput(text);
+    if (text === '') {
+      setValidationError('');
+      return;
+    }
+    
+    const num = parseInt(text);
+    if (!isNaN(num)) {
+      validateOccurrences(text);
+      setLocalConfig(prev => ({ ...prev, occurrences: num }));
+    }
+  };
+
+  const handleSave = () => {
+    if (localConfig.endType === 'occurrences') {
+      if (!validateOccurrences(occurrencesInput)) {
+        Toast.show({
+          type: 'error',
+          text1: 'Invalid Occurrences',
+          text2: validationError,
+          position: 'top',
+        });
+        return;
+      }
+    }
+    onSave(localConfig);
+  };
+
+  const frequencies = [
+    { label: 'Daily', value: 'daily' },
+    { label: 'Weekly', value: 'weekly' },
+    { label: 'Bi-weekly', value: 'biweekly' },
+    { label: 'Monthly', value: 'monthly' },
+    { label: 'Quarterly', value: 'quarterly' },
+    { label: 'Yearly', value: 'yearly' },
+  ];
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalContainer}>
+        <View style={[styles.modalContent, { backgroundColor: theme.surface }]}>
+          <View style={styles.header}>
+            <Text style={[styles.title, { color: theme.textPrimary }]}>
+              Recurring Transaction
+            </Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x" size={24} color={theme.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false}>
+            {/* Frequency selector */}
+            <View style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                Frequency
+              </Text>
+              <View style={[styles.pickerContainer, { borderColor: theme.border }]}>
+                <Picker
+                  selectedValue={localConfig.frequency}
+                  onValueChange={(value) =>
+                    setLocalConfig(prev => ({ ...prev, frequency: value }))
+                  }
+                  style={{ color: theme.textPrimary }}
+                >
+                  {frequencies.map((freq) => (
+                    <Picker.Item
+                      key={freq.value}
+                      label={freq.label}
+                      value={freq.value}
+                    />
+                  ))}
+                </Picker>
+              </View>
+            </View>
+
+            {/* Interval */}
+            <View style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                Repeat every
+              </Text>
+              <View style={styles.intervalContainer}>
+                <TextInput
+                  style={[styles.intervalInput, { 
+                    color: theme.textPrimary,
+                    borderColor: theme.border,
+                  }]}
+                  value={localConfig.interval.toString()}
+                  onChangeText={(text) => {
+                    const num = parseInt(text) || 1;
+                    setLocalConfig(prev => ({ ...prev, interval: num }));
+                  }}
+                  keyboardType="number-pad"
+                />
+                <Text style={[styles.intervalText, { color: theme.textPrimary }]}>
+                  {localConfig.frequency === 'daily' ? 'day(s)' :
+                   localConfig.frequency === 'weekly' ? 'week(s)' :
+                   localConfig.frequency === 'biweekly' ? 'bi-week(s)' :
+                   localConfig.frequency === 'monthly' ? 'month(s)' :
+                   localConfig.frequency === 'quarterly' ? 'quarter(s)' :
+                   'year(s)'}
+                </Text>
+              </View>
+            </View>
+
+            {/* End type */}
+            <View style={styles.section}>
+              <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                End Condition
+              </Text>
+              <View style={styles.endTypeContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.endTypeButton,
+                    localConfig.endType === 'occurrences' && styles.endTypeButtonActive,
+                    { borderColor: theme.border },
+                  ]}
+                  onPress={() => setLocalConfig(prev => ({ ...prev, endType: 'occurrences' }))}
+                >
+                  <Text style={[
+                    styles.endTypeText,
+                    { color: localConfig.endType === 'occurrences' ? theme.primary : theme.textSecondary }
+                  ]}>
+                    After occurrences
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.endTypeButton,
+                    localConfig.endType === 'date' && styles.endTypeButtonActive,
+                    { borderColor: theme.border },
+                  ]}
+                  onPress={() => setLocalConfig(prev => ({ ...prev, endType: 'date' }))}
+                >
+                  <Text style={[
+                    styles.endTypeText,
+                    { color: localConfig.endType === 'date' ? theme.primary : theme.textSecondary }
+                  ]}>
+                    By date
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Occurrences input */}
+            {localConfig.endType === 'occurrences' && (
+              <View style={styles.section}>
+                <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                  Number of Occurrences (2-299)
+                </Text>
+                <TextInput
+                  style={[
+                    styles.occurrencesInput,
+                    { 
+                      color: theme.textPrimary,
+                      borderColor: validationError ? theme.danger : theme.border,
+                    }
+                  ]}
+                  value={occurrencesInput}
+                  onChangeText={handleOccurrencesChange}
+                  keyboardType="number-pad"
+                  placeholder="Enter 2-299"
+                  placeholderTextColor={theme.textSecondary}
+                />
+                {validationError ? (
+                  <Text style={[styles.errorText, { color: theme.danger }]}>
+                    {validationError}
+                  </Text>
+                ) : (
+                  <Text style={[styles.helperText, { color: theme.textSecondary }]}>
+                    Transaction will repeat {occurrencesInput || '0'} times
+                  </Text>
+                )}
+              </View>
+            )}
+
+            {/* End date picker */}
+            {localConfig.endType === 'date' && (
+              <View style={styles.section}>
+                <Text style={[styles.sectionTitle, { color: theme.textSecondary }]}>
+                  End Date
+                </Text>
+                <TouchableOpacity
+                  style={[styles.dateButton, { borderColor: theme.border }]}
+                  onPress={() => setShowEndDatePicker(true)}
+                >
+                  <Feather name="calendar" size={20} color={theme.textSecondary} />
+                  <Text style={[styles.dateText, { color: theme.textPrimary }]}>
+                    {localConfig.endDate
+                      ? localConfig.endDate.toDateString()
+                      : 'Select end date'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* Preview */}
+            <View style={[styles.previewContainer, { backgroundColor: theme.background }]}>
+              <Text style={[styles.previewTitle, { color: theme.textPrimary }]}>
+                Preview
+              </Text>
+              <Text style={[styles.previewText, { color: theme.textSecondary }]}>
+                This transaction will repeat {localConfig.frequency}
+                {localConfig.interval > 1 ? ` every ${localConfig.interval}` : ''}
+                {localConfig.endType === 'occurrences'
+                  ? ` for ${localConfig.occurrences} times`
+                  : localConfig.endDate
+                  ? ` until ${localConfig.endDate.toDateString()}`
+                  : ''}
+              </Text>
+            </View>
+          </ScrollView>
+
+          {/* Action buttons */}
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={[styles.cancelButton, { borderColor: theme.border }]}
+              onPress={onClose}
+            >
+              <Text style={[styles.cancelButtonText, { color: theme.textSecondary }]}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.saveButton, { backgroundColor: theme.primary }]}
+              onPress={handleSave}
+            >
+              <Text style={styles.saveButtonText}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+
+      {showEndDatePicker && (
+        <DateTimePicker
+          value={localConfig.endDate || new Date()}
+          mode="date"
+          display="default"
+          minimumDate={new Date()}
+          onChange={(event, date) => {
+            setShowEndDatePicker(false);
+            if (date) {
+              setLocalConfig(prev => ({ ...prev, endDate: date }));
+            }
+          }}
+        />
+      )}
+    </Modal>
+  );
+};
+
+const styles = StyleSheet.create({
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 24,
+    padding: 24,
+    maxHeight: '80%',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  pickerContainer: {
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  intervalContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  intervalInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    width: 80,
+  },
+  intervalText: {
+    fontSize: 16,
+  },
+  endTypeContainer: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  endTypeButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  endTypeButtonActive: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+  },
+  endTypeText: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  occurrencesInput: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+  },
+  errorText: {
+    fontSize: 12,
+    marginTop: 4,
+  },
+  helperText: {
+    fontSize: 12,
+    marginTop: 4,
+  },
+  dateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+  },
+  dateText: {
+    fontSize: 16,
+  },
+  previewContainer: {
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 24,
+  },
+  previewTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  previewText: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  actions: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  cancelButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  cancelButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  saveButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+  },
+  saveButtonText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+});
+
+export default RecurringModal;
+````
+
+````typescript name=src/components/Transactions/SplitModal.tsx
+import React, { useState, useEffect } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Modal,
+  TouchableOpacity,
+  TextInput,
+  ScrollView,
+  Alert,
+} from 'react-native';
+import { Feather } from '@expo/vector-icons';
+import { useTheme } from '../../contexts/ThemeContext';
+import { SplitConfig, SplitParticipant } from '../../types/transaction';
+import Toast from 'react-native-toast-message';
+
+interface SplitModalProps {
+  visible: boolean;
+  totalAmount: number;
+  config?: SplitConfig | null;
+  onSave: (config: SplitConfig) => void;
+  onClose: () => void;
+}
+
+const SplitModal: React.FC<SplitModalProps> = ({
+  visible,
+  totalAmount,
+  config,
+  onSave,
+  onClose,
+}) => {
+  const { theme } = useTheme();
+  const [splitMethod, setSplitMethod] = useState<'equal' | 'percentage' | 'custom'>('equal');
+  const [participants, setParticipants] = useState<SplitParticipant[]>([
+    { id: '1', name: 'You', amount: 0, percentage: 0 },
+    { id: '2', name: '', amount: 0, percentage: 0 },
+  ]);
+  const [validationError, setValidationError] = useState('');
+
+  useEffect(() => {
+    if (config) {
+      setSplitMethod(config.method);
+      setParticipants(config.participants);
+    } else {
+      // Initialize with equal split
+      handleEqualSplit();
+    }
+  }, [config, totalAmount]);
+
+  const handleEqualSplit = () => {
+    const equalAmount = totalAmount / participants.length;
+    const equalPercentage = 100 / participants.length;
+    setParticipants(prev =>
+      prev.map(p => ({
+        ...p,
+        amount: parseFloat(equalAmount.toFixed(2)),
+        percentage: parseFloat(equalPercentage.toFixed(2)),
+      }))
+    );
+  };
+
+  const addParticipant = () => {
+    if (participants.length >= 50) {
+      Toast.show({
+        type: 'error',
+        text1: 'Maximum Participants Reached',
+        text2: 'You can split between maximum 50 participants',
+        position: 'top',
+      });
+      return;
+    }
+
+    const newParticipant: SplitParticipant = {
+      id: Date.now().toString(),
+      name: '',
+      amount: 0,
+      percentage: 0,
+    };
+    setParticipants([...participants, newParticipant]);
+    
+    if (splitMethod === 'equal') {
+      setTimeout(handleEqualSplit, 0);
+    }
+  };
+
+  const removeParticipant = (id: string) => {
+    if (participants.length <= 2) {
+      Toast.show({
+        type: 'error',
+        text1: 'Minimum Participants Required',
+        text2: 'Split requires at least 2 participants',
+        position: 'top',
+      });
+      return;
+    }
+
+    setParticipants(prev => prev.filter(p => p.id !== id));
+    
+    if (splitMethod === 'equal') {
+      setTimeout(handleEqualSplit, 0);
+    }
+  };
+
+  const updateParticipant = (id: string, field: keyof SplitParticipant, value: any) => {
+    setParticipants(prev =>
+      prev.map(p => {
+        if (p.id === id) {
+          const updated = { ...p, [field]: value };
+          
+          // Update percentage if amount changes
+          if (field === 'amount' && totalAmount > 0) {
+            updated.percentage = parseFloat(((value / totalAmount) * 100).toFixed(2));
+          }
+          
+          // Update amount if percentage changes
+          if (field === 'percentage') {
+            updated.amount = parseFloat(((value / 100) * totalAmount).toFixed(2));
+          }
+          
+          return updated;
+        }
+        return p;
+      })
+    );
+  };
+
+  const validateSplit = (): boolean => {
+    // Check participant count
+    if (participants.length < 2 || participants.length > 50) {
+      setValidationError(`Number of participants must be between 2 and 50 (current: ${participants.length})`);
+      return false;
+    }
+
+    // Check if all participants have names
+    const emptyNames = participants.filter(p => !p.name.trim());
+    if (emptyNames.length > 0) {
+      setValidationError('All participants must have names');
+      return false;
+    }
+
+    // Check if amounts sum to total
+    const sum = participants.reduce((acc, p) => acc + p.amount, 0);
+    const difference = Math.abs(sum - totalAmount);
+    if (difference > 0.01) {
+      setValidationError(`Split amounts must sum to ${totalAmount.toFixed(2)} (current: ${sum.toFixed(2)})`);
+      return false;
+    }
+
+    setValidationError('');
+    return true;
+  };
+
+  const handleSave = () => {
+    if (!validateSplit()) {
+      Toast.show({
+        type: 'error',
+        text1: 'Invalid Split Configuration',
+        text2: validationError,
+        position: 'top',
+      });
+      return;
+    }
+
+    const config: SplitConfig = {
+      method: splitMethod,
+      participants,
+    };
+    onSave(config);
+  };
+
+  const getRemainingAmount = () => {
+    const sum = participants.reduce((acc, p) => acc + p.amount, 0);
+    return totalAmount - sum;
+  };
+
+  return (
+    <Modal
+      visible={visible}
+      animationType="slide"
+      transparent
+      onRequestClose={onClose}
+    >
+      <View style={styles.modalContainer}>
+        <View style={[styles.modalContent, { backgroundColor: theme.surface }]}>
+          <View style={styles.header}>
+            <Text style={[styles.title, { color: theme.textPrimary }]}>
+              Split Transaction
+            </Text>
+            <TouchableOpacity onPress={onClose}>
+              <Feather name="x" size={24} color={theme.textSecondary} />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.totalAmountContainer}>
+            <Text style={[styles.totalAmountLabel, { color: theme.textSecondary }]}>
+              Total Amount
+            </Text>
+            <Text style={[styles.totalAmount, { color: theme.textPrimary }]}>
+              ₹{totalAmount.toFixed(2)}
+            </Text>
+          </View>
+
+          {/* Split method selector */}
+          <View style={styles.methodContainer}>
+            {['equal', 'percentage', 'custom'].map((method) => (
+              <TouchableOpacity
+                key={method}
+                style={[
+                  styles.methodButton,
+                  splitMethod === method && styles.methodButtonActive,
+                  { borderColor: theme.border },
+                ]}
+                onPress={() => {
+                  setSplitMethod(method as any);
+                  if (method === 'equal') {
+                    handleEqualSplit();
+                  }
+                }}
+              >
+                <Text
+                  style={[
+                    styles.methodText,
+                    { color: splitMethod === method ? theme.primary : theme.textSecondary },
+                  ]}
+                >
+                  {method.charAt(0).toUpperCase() + method.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <ScrollView style={styles.participantsList} showsVerticalScrollIndicator={false}>
+            <View style={styles.participantHeader}>
+              <Text style={[styles.participantCount, { color: theme.textSecondary }]}>
+                {participants.length} participants (2-50 allowed)
+              </Text>
+              <TouchableOpacity onPress={addParticipant} disabled={participants.length >= 50}>
+                <Feather 
+                  name="user-plus" 
+                  size={20} 
+                  color={participants.length >= 50 ? theme.textSecondary : theme.primary} 
+                />
+              </TouchableOpacity>
+            </View>
+
+            {participants.map((participant, index) => (
+              <View key={participant.id} style={[styles.participantCard, { borderColor: theme.border }]}>
+                <View style={styles.participantRow}>
+                  <TextInput
+                    style={[styles.nameInput, { color: theme.textPrimary, borderColor: theme.border }]}
+                    value={participant.name}
+                    onChangeText={(text) => updateParticipant(participant.id, 'name', text)}
+                    placeholder={index === 0 ? 'Your name' : 'Participant name'}
+                    placeholderTextColor={theme.textSecondary}
+                  />
+                  {participants.length > 2 && (
+                    <TouchableOpacity onPress={() => removeParticipant(participant.id)}>
+                      <Feather name="trash-2" size={18} color={theme.danger} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+                
+                <View style={styles.amountRow}>
+                  <View style={styles.amountInputContainer}>
+                    <Text style={[styles.currencySymbol, { color: theme.textPrimary }]}>₹</Text>
+                    <TextInput
+                      style={[styles.amountInput, { color: theme.textPrimary }]}
+                      value={participant.amount.toFixed(2)}
+                      onChangeText={(text) => {
+                        const amount = parseFloat(text) || 0;
+                        updateParticipant(participant.id, 'amount', amount);
+                      }}
+                      keyboardType="decimal-pad"
+                      editable={splitMethod !== 'equal'}
+                    />
+                  </View>
+                  
+                  <View style={styles.percentageContainer}>
+                    <TextInput
+                      style={[styles.percentageInput, { color: theme.textPrimary }]}
+                      value={participant.percentage.toFixed(1)}
+                      onChangeText={(text) => {
+                        const percentage = parseFloat(text) || 0;
+                        updateParticipant(participant.id, 'percentage', percentage);
+                      }}
+                      keyboardType="decimal-pad"
+                      editable={splitMethod === 'percentage'}
+                    />
+                    <Text style={[styles.percentageSymbol, { color: theme.textSecondary }]}>%</Text>
+                  </View>
+                </View>
+              </View>
+            ))}
+          </ScrollView>
+
+          {/* Remaining amount indicator */}
+          {splitMethod !== 'equal' && (
+            <View style={[
+              styles.remainingContainer,
+              { backgroundColor: Math.abs(getRemainingAmount()) > 0.01 ? '#FFF3CD' : '#D4EDDA' }
+            ]}>
+              <Text style={styles.remainingText}>
+                Remaining: ₹{getRemainingAmount().toFixed(2)}
+              </Text>
+            </View>
+          )}
+
+          {validationError ? (
+            <Text style={[styles.errorText, { color: theme.danger }]}>
+              {validationError}
+            </Text>
+          ) : null}
+
+          {/* Action buttons */}
+          <View style={styles.actions}>
+            <TouchableOpacity
+              style={[styles.cancelButton, { borderColor: theme.border }]}
+              onPress={onClose}
+            >
+              <Text style={[styles.cancelButtonText, { color: theme.textSecondary }]}>
+                Cancel
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.saveButton, { backgroundColor: theme.primary }]}
+              onPress={handleSave}
+            >
+              <Text style={styles.saveButtonText}>Apply Split</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+const styles = StyleSheet.create({
+  modalContainer: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 24,
+    padding: 24,
+    maxHeight: '80%',
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '700',
+  },
+  totalAmountContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+    padding: 16,
+    backgroundColor: 'rgba(0, 122, 255, 0.05)',
+    borderRadius: 12,
+  },
+  totalAmountLabel: {
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  totalAmount: {
+    fontSize: 28,
+    fontWeight: '700',
+  },
+  methodContainer: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 20,
+  },
+  methodButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  methodButtonActive: {
+    backgroundColor: 'rgba(0, 122, 255, 0.1)',
+  },

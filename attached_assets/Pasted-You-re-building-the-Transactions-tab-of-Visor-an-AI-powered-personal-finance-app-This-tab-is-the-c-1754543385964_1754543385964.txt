@@ -1,0 +1,118 @@
+You're building the Transactions tab of Visor, an AI-powered personal finance app. This tab is the central ledger where users can view, add, edit, delete, split, and mark recurring transactions — across Income, Expenses, and Investments — all in real-time with an intuitive and beautifully minimal UI.
+🌟 Design Philosophy
+Use a clean, modern iOS 16–17 inspired look: rounded-2xl cards, smooth shadows, soft pastel accents.
+Icons from Heroicons / Lucide / Tabler — no emojis
+Fully mobile responsive, but scales gracefully on tablet and web (more space = richer view)
+All elements should feel tactile, smooth, adaptive
+Use Inter or font-sans typography, proper padding (p-4, mb-4, gap-4)
+Light and Dark themes ready
+📌 Layout & Features
+🔍 1. Top Bar
+Title: Transactions
+Optional dropdown: Filter by Month
+Search bar: filter by keyword (title, category)
+Filter buttons:
+Income / Expense / Investment / All
+Category filter dropdown
+Date range picker
+📋 2. Transaction List
+Scrollable vertical list of user’s transactions (most recent on top)
+Each transaction card includes:
+Icon based on category (e.g., Banknote for salary, Pizza for food)
+Title (e.g., “Grocery shopping”)
+Category (subtext)
+Amount (with + / – and color-coded: green = income, red = expense)
+Date
+Tap a card to Edit / Delete / Duplicate
+➕ 3. FAB (Floating Action Button)
+Bottom-right corner FAB (blue “+” icon) expands into:
+Add Income
+Add Expense
+Add Investment
+Animate expansion with scale and fade
+🧾 4. Add / Edit Transaction Modal
+Reusable modal with:
+📝 Input Fields:
+Type: Toggle or dropdown (Income / Expense / Investment)
+Title: Text input (e.g., “Monthly Salary”)
+Amount: Input with ₹ prefix and validations
+Category: Horizontal scroll with icons (not emojis), based on type
+Date: Date Picker
+Notes: Optional text area
+🔁 Toggles:
+Recurring
+If toggled, show dropdown: weekly / monthly / quarterly
+Notify user if amount is not in range (₹2 to ₹10,00,000)
+Split Transaction
+If toggled, input participant names (tags or comma-separated)
+Notify if split amount is outside the ₹2 to ₹10,00,000 range
+✅ Buttons:
+Save / Cancel
+Validate form before allowing save
+Auto-close on save, update in real time
+🔧 5. Edit/Delete Transaction
+Long press or tap → show:
+Edit (open same modal pre-filled)
+Delete (confirm before remove)
+Duplicate (copy transaction and reopen modal for quick edits)
+🧠 6. Data Handling & Updates
+All transactions should:
+Immediately update the dashboard summaries
+Recalculate AI Insights
+Persist to localStorage (or mock backend if present)
+Create a TransactionContext (or Zustand store) with:
+{
+  transactions: Transaction[],
+  addTransaction: (tx) => void,
+  updateTransaction: (id, updated) => void,
+  deleteTransaction: (id) => void,
+  filterTransactions: (criteria) => Transaction[]
+}
+🗃️ 7. Data Model Example
+interface Transaction {
+  id: string;
+  type: 'income' | 'expense' | 'investment';
+  title: string;
+  amount: number;
+  category: string;
+  date: string; // ISO string
+  notes?: string;
+  isRecurring: boolean;
+  recurrence?: 'weekly' | 'monthly' | 'quarterly';
+  isSplit: boolean;
+  splitWith?: string[];
+}
+🎨 Category Icons Suggestion (for different types)
+Income:
+Salary: briefcase
+Freelance: user-cog
+Gift: gift
+Bonus: star
+Refund: rotate-ccw
+Expenses:
+Food: pizza
+Travel: airplane
+Bills: credit-card
+Shopping: shopping-bag
+Rent: home
+Investments:
+SIP: bar-chart
+FD: banknote
+Stocks: line-chart
+Crypto: bitcoin
+PPF: shield
+💬 Empty State (if no transactions)
+Friendly message: “No transactions yet — tap the ➕ to get started!”
+Icon: notebook-pen or clipboard-list
+🧪 UX Extras (Optional for Later)
+Swipe left to delete, swipe right to edit (mobile gesture)
+Add animation on save/delete
+Add keyboard-friendly navigation for desktop users
+🧩 Final Checklist
+✅ Fully functional, mobile-optimized Transactions tab
+✅ Real-time data updates app-wide
+✅ Functional modals for add/edit
+✅ Proper input validation & feedback
+✅ Consistent pastel UI and beautiful icons
+✅ All updates flow into Dashboard + AI insights
+✅ Transactions persist with LocalStorage
